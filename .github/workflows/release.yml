@@ -1,0 +1,58 @@
+# Builds SpaceMonger.app with make-release.sh (universal, ad-hoc signed).
+#   - Push a tag like v1.0.0 → a GitHub Release with the app zip and dSYM.
+#   - Run it by hand (Actions ▸ Release ▸ Run workflow) → just build and
+#     attach the zip to the run as an artifact, no release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the release
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # make-release.sh numbers builds by commit count
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev.$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build app
+        run: VERSION="${{ steps.version.outputs.version }}" ./make-release.sh
+
+      - name: Zip debug symbols
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          ditto -c -k --keepParent "dist/SpaceMonger-$v.dSYM" "dist/SpaceMonger-$v.dSYM.zip"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpaceMonger-${{ steps.version.outputs.version }}
+          path: |
+            dist/SpaceMonger-${{ steps.version.outputs.version }}.zip
+            dist/SpaceMonger-${{ steps.version.outputs.version }}.dSYM.zip
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/SpaceMonger-$v.zip" "dist/SpaceMonger-$v.dSYM.zip" \
+            --title "SpaceMonger $v" \
+            --notes-file .github/release-notes.md \
+            --generate-notes
